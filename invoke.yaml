@@ -1,0 +1,28 @@
+env: dev
+dev:
+  es:
+    host: search-dev-lun-domain-n3m5c2g237vm-cjbj5jctlle3udwwnhkysecwqi.us-west-2.es.amazonaws.com
+    region: us-west-2
+  dynamo:
+    region: us-west-2
+    tables:
+      reply:
+        dev-reply-v1
+      topic:
+        dev-topic-v1
+      topic_item:
+        dev-topic-item-v1
+
+prod:
+  es:
+    region: us-east-1
+    host: search-bot-lun-domain-5p85mcaqwxit-phs7uksx6hyws7youj77zd76om.us-east-1.es.amazonaws.com
+  dynamo:
+    region: us-east-1
+    tables:
+      reply:
+        prod-reply-v1
+      topic:
+        prod-topic-v1
+      topic_item:
+        prod-topic-item-v1

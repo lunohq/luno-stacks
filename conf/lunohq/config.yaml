@@ -1,0 +1,337 @@
+mappings:
+  AmiMap:
+    us-east-1:
+      ubuntu1404: ami-c135f3aa
+      empire: ami-5e1e9649
+      drone: ami-3ffe0a52
+    us-west-1:
+      ubuntu1404: ami-bf3dccfb
+      empire: ami-979fdef7
+      drone: ami-9ec0b8fe
+    us-west-2:
+      ubuntu1404: ami-f15b5dc1
+      empire: ami-4c2fe32c
+      drone: ami-8640bfe6
+
+pre_build:
+  - path: stacker.hooks.keypair.ensure_keypair_exists
+    required: true
+    args:
+      keypair: ${ssh_key_name}
+  - path: stacker.hooks.route53.create_domain
+    required: true
+    args:
+      domain: ${external_domain}
+  - path: stacker.hooks.iam.ensure_server_cert_exists
+    required: true
+    args:
+      cert_name: ${empire_controller_cert_name}
+
+vpc_params: &vpc_params
+  VpcId: vpc::VpcId
+  DefaultSG: vpc::DefaultSG
+  PublicSubnets: vpc::PublicSubnets
+  PrivateSubnets: vpc::PrivateSubnets
+  AvailabilityZones: vpc::AvailabilityZones
+
+docker_params: &docker_params
+  DockerRegistry: ${docker_registry}
+  DockerRegistryUser: ${docker_registry_user}
+  DockerRegistryPassword: ${docker_registry_password}
+  DockerRegistryEmail: ${docker_registry_email}
+
+snapshot_params: &snapshot_params
+  PipelineLogUri: ${snapshot_pipeline_log_uri}
+  ResourceRole: 'DataPipelineDefaultResourceRole'
+  Role: 'DataPipelineDefaultRole'
+  Activate: 'true'
+  SchedulePeriod: '1 day'
+  ScheduleType: 'cron'
+
+stacks:
+  - name: vpc
+    class_path: stacker_blueprints.vpc.VPC
+    locked: true
+    parameters:
+      AZCount: 2
+      PublicSubnets: 10.128.0.0/24,10.128.1.0/24,10.128.2.0/24,10.128.3.0/24
+      PrivateSubnets: 10.128.8.0/22,10.128.12.0/22,10.128.16.0/22,10.128.20.0/22
+      InternalDomain: ${vpc_internal_domain}
+      CidrBlock: 10.128.0.0/16
+      UseNatGateway: true
+      SshKeyName: ${ssh_key_name}
+  - name: bastion
+    class_path: stacker_blueprints.bastion.Bastion
+    parameters:
+      << : *vpc_params
+      InstanceType: ${bastion_instance_type}
+      OfficeNetwork: ${trusted_network_cidr}
+      MinSize: ${bastion_min_size}
+      MaxSize: ${bastion_max_size}
+      ImageName: ubuntu1404
+      SshKeyName: ${ssh_key_name}
+  - name: empireDB
+    class_path: stacker_blueprints.rds.postgres.MasterInstance
+    locked: true
+    parameters:
+      << : *vpc_params
+      Subnets: vpc::PrivateSubnets
+      InstanceType: ${empire_rds_instance_type}
+      AllowMajorVersionUpgrade: 'false'
+      AllowMinorVersionUpgrade: 'true'
+      AllocatedStorage: ${empire_rds_disk_size}
+      MasterUser: ${empire_rds_user}
+      MasterUserPassword: ${empire_rds_password}
+      DatabaseName: empire
+      DBInstanceIdentifier: ${empire_rds_instance_identifier}
+      MultiAZ: ${empire_rds_multi_az}
+      StorageEncrypted: ${empire_rds_storage_encrypted}
+      EngineVersion: 9.4.1
+      EngineMajorVersion: 9.4
+      DBFamily: postgres9.4
+      InternalZoneId: vpc::InternalZoneId
+      InternalZoneName: vpc::InternalZoneName
+      InternalHostname: empire-db
+  - name: empireMinion
+    class_path: blueprints.empire.Minion
+    parameters:
+      << : *vpc_params
+      << : *docker_params
+      DataDogAPIKey: ${data_dog_api_key}
+      DataDogTags: ${data_dog_minion_tags}
+      InstanceType: ${empire_minion_instance_type}
+      MinHosts: ${empire_minion_min_instance_count}
+      MaxHosts: ${empire_minion_max_instance_count}
+      SshKeyName: ${ssh_key_name}
+      ImageName: empire
+  - name: empireController
+    class_path: blueprints.empire.Controller
+    parameters:
+      << : *vpc_params
+      << : *docker_params
+      DataDogAPIKey: ${data_dog_api_key}
+      DataDogTags: ${data_dog_controller_tags}
+      InstanceType: ${empire_controller_instance_type}
+      MinHosts: ${empire_controller_min_instance_count}
+      MaxHosts: ${empire_controller_max_instance_count}
+      SshKeyName: ${ssh_key_name}
+      ImageName: empire
+      DatabaseSecurityGroup: empireDB::SecurityGroup
+  - name: empireDaemon
+    class_path: stacker_blueprints.empire.daemon.EmpireDaemon
+    parameters:
+      << : *vpc_params
+      << : *docker_params
+      DesiredCount: 1
+      TaskMemory: 512
+      TaskCPU: 1024
+      InternalZoneId: vpc::InternalZoneId
+      ExternalDomain: ${external_domain}
+      TrustedNetwork: ${trusted_network_cidr}
+      ELBCertName: ${empire_controller_cert_name}
+      PublicAppELBSG: empireMinion::PublicAppELBSG
+      PrivateAppELBSG: empireMinion::PrivateAppELBSG
+      MinionCluster: empireMinion::ECSCluster
+      ControllerCluster: empireController::ECSCluster
+      DatabaseHost: empireDB::DBCname
+      DatabaseUser: ${empire_rds_user}
+      DatabasePassword: ${empire_rds_password}
+      Environment: ${empire_environment}
+      GitHubClientId: ${empire_controller_github_client_id}
+      GitHubClientSecret: ${empire_controller_github_client_secret}
+      GitHubOrganization: ${empire_controller_github_organization}
+      TokenSecret: ${empire_controller_token_secret}
+      EventsBackend: 'sns'
+      InstanceSecurityGroup: empireController::SecurityGroup
+      InstanceRole: empireController::IAMRole
+      DockerImage: mhahn/empire:2ce65b3079391c16c22b0422edf4762c854c03d3
+      LogsStreamer: kinesis
+      ServiceMinimumHealthyPercent: 0
+  - name: serverless
+    class_path: blueprints.serverless.Serverless
+    parameters:
+      Role: empireMinion::IAMRole
+  - name: schema
+    class_path: blueprints.schema.Schema
+    locked: true
+    parameters:
+      Roles: empireMinion::IAMRole,empireController::IAMRole
+      TeamTableName: ${schema_team_table_name}
+      TeamTableReadCapacity: ${schema_team_table_read_capacity}
+      TeamTableWriteCapacity: ${schema_team_table_write_capacity}
+      UserTableName: ${schema_user_table_name}
+      UserTableReadCapacity: ${schema_user_table_read_capacity}
+      UserTableWriteCapacity: ${schema_user_table_write_capacity}
+      BotTableName: ${schema_bot_table_name}
+      AnswerTableName: ${schema_answer_table_name}
+      ThreadTableName: ${schema_thread_table_name}
+      ThreadEventTableName: ${schema_thread_event_table_name}
+      TokenTableName: ${schema_token_table_name}
+      AdminTokenTableName: ${schema_admin_token_table_name}
+      TopicTableName: ${schema_topic_table_name}
+      TopicNameTableName: ${schema_topic_name_table_name}
+      TopicItemTableName: ${schema_topic_item_table_name}
+      ReplyTableName: ${schema_reply_table_name}
+      ThreadLogTableName: ${schema_thread_log_table_name}
+      FileTableName: ${schema_file_table_name}
+  - name: elasticsearch
+    class_path: blueprints.elasticsearch.Elasticsearch
+    locked: true
+    parameters:
+      Role: empireMinion::IAMRole
+      InternalZoneId: vpc::InternalZoneId
+      InternalZoneName: vpc::InternalZoneName
+      InternalHostname: es
+  - name: privateBucket
+    class_path: blueprints.private.Bucket
+    enabled: ${private_bucket_enabled}
+    locked: true
+    parameters:
+      Roles: empireController::IAMRole
+      BucketName: lunobot-private
+  - name: redis
+    class_path: stacker_blueprints.elasticache.redis.RedisReplicationGroup
+    parameters:
+      << : *vpc_params
+      Subnets: vpc::PrivateSubnets
+      AutomaticFailoverEnabled: ${redis_automatic_failover}
+      AutoMinorVersionUpgrade: 'true'
+      CacheNodeType: ${redis_cache_node_type}
+      EngineVersion: 2.8.23
+      ParameterGroupFamily: redis2.8
+      NumCacheClusters: ${redis_num_cache_clusters}
+      InternalZoneId: vpc::InternalZoneId
+      InternalZoneName: vpc::InternalZoneName
+      InternalHostname: redis
+      SnapshotRetentionLimit: ${redis_snapshot_retention_limit}
+  - name: sg
+    class_path: blueprints.sg.SG
+    parameters:
+      RedisSecurityGroup: redis::SecurityGroup
+      MinionSecurityGroup: empireMinion::SecurityGroup
+  - name: botFirehose
+    class_path: blueprints.bot_firehose.BotFirehose
+    parameters:
+      Role: empireMinion::IAMRole
+      BucketName: ${bot_firehose_bucket_name}
+  - name: sns
+    class_path: blueprints.sns.SNS
+    parameters:
+      Role: empireMinion::IAMRole
+  - name: drone
+    class_path: stacker_blueprints.drone.postgres.Drone
+    enabled: ${drone_enabled}
+    parameters:
+      << : *vpc_params
+      SshKeyName: ${ssh_key_name}
+      TrustedNetwork: ${trusted_network_cidr}
+      ExternalDomain: ${external_domain}
+      RemoteDriver: ${drone_remote_driver}
+      RemoteConfig: ${drone_remote_config}
+      DatabaseDriver: postgres
+      DatabaseSecurityGroup: empireDB::SecurityGroup
+      DatabaseHost: empireDB::DBCname
+      DatabaseUser: ${empire_rds_user}
+      DatabasePassword: ${empire_rds_password}
+      DatabaseName: ${drone_database_name}
+      CreateDatabase: 'true'
+      PluginParams: ${drone_plugin_params}
+      Debug: ${drone_debug}
+  - name: cloudfront
+    class_path: blueprints.cloudfront.CloudFront
+    enabled: ${cloudfront_enabled}
+    parameters:
+      BucketName: ${cloudfront_bucket_name}
+      Role: drone::IAMRole
+      Enabled: 'true'
+  - name: team-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_team_table_name}'
+      TableName: ${schema_team_table_name}
+      StartDateTime: '2016-06-15T02:00:00'
+  - name: user-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_user_table_name}'
+      TableName: ${schema_user_table_name}
+      StartDateTime: '2016-06-15T02:30:00'
+  - name: bot-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_bot_table_name}'
+      TableName: ${schema_bot_table_name}
+      StartDateTime: '2016-06-15T03:00:00'
+  - name: answer-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_answer_table_name}'
+      TableName: ${schema_answer_table_name}
+      StartDateTime: '2016-06-15T03:30:00'
+  - name: thread-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_thread_table_name}'
+      TableName: ${schema_thread_table_name}
+      StartDateTime: '2016-06-15T04:00:00'
+  - name: thread-event-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_thread_event_table_name}'
+      TableName: ${schema_thread_event_table_name}
+      StartDateTime: '2016-06-15T04:30:00'
+  - name: reply-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_reply_table_name}'
+      TableName: ${schema_reply_table_name}
+      StartDateTime: '2016-07-05T05:00:00'
+  - name: topic-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_topic_table_name}'
+      TableName: ${schema_topic_table_name}
+      StartDateTime: '2016-07-05T05:30:00'
+  - name: topic-item-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_topic_item_table_name}'
+      TableName: ${schema_topic_item_table_name}
+      StartDateTime: '2016-07-05T06:00:00'
+  - name: file-snapshot
+    class_path: stacker_blueprints.dynamodb_snapshot.DynamoDBSnapshot
+    enabled: false
+    parameters:
+      << : *snapshot_params
+      S3OutputLocation: '${snapshot_s3_output_location}/${schema_file_table_name}'
+      TableName: ${schema_file_table_name}
+      StartDateTime: '2016-07-05T06:30:00'
+  - name: fileBucket
+    class_path: blueprints.private.Bucket
+    locked: true
+    parameters:
+      Roles: empireMinion::IAMRole
+      BucketName: ${file_bucket_name}
+  - name: slack-ttt
+    class_path: blueprints.slack_ttt.SlackTTT
+    parameters:
+      RDSSecurityGroup: empireDB::SecurityGroup
+      MinionSecurityGroup: empireMinion::SecurityGroup

@@ -1,0 +1,19 @@
+-e git+git@github.com:mhahn/awacs.git@4c28cdab4b962441e0146cd76a0e7bac4160dc3d#egg=awacs
+aws-es-connection==0.2
+-e git+git@github.com:lunohq/luno-stacks.git@a4c200e03760226982cdf1cb9c3fc0d8504dd227#egg=blueprints
+boto==2.39.0
+boto3==1.3.0
+botocore==1.4.8
+docutils==0.12
+elasticsearch==1.9.0
+elasticsearch-dsl==0.0.11
+futures==3.0.5
+invoke==0.12.2
+jmespath==0.9.0
+python-dateutil==2.5.2
+PyYAML==3.11
+six==1.10.0
+stacker==0.6.1
+-e git+git@github.com:mhahn/stacker_blueprints.git@fe363974100d0e61388f3fe675aee8025fe6ab9e#egg=stacker_blueprints
+-e git+git@github.com:mhahn/troposphere.git@fb2f2b6573a76da04e4231d80ff106c2b96e4fc0#egg=troposphere
+urllib3==1.15.1
