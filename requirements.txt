@@ -11,7 +11,7 @@ futures==3.0.5
 invoke==0.12.2
 jmespath==0.9.0
 python-dateutil==2.5.2
-PyYAML==3.11
+PyYAML==5.4
 six==1.10.0
 stacker==0.6.1
 -e git+git@github.com:mhahn/stacker_blueprints.git@fe363974100d0e61388f3fe675aee8025fe6ab9e#egg=stacker_blueprints
