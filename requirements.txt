@@ -16,4 +16,4 @@ six==1.10.0
 stacker==0.6.1
 -e git+git@github.com:mhahn/stacker_blueprints.git@fe363974100d0e61388f3fe675aee8025fe6ab9e#egg=stacker_blueprints
 -e git+git@github.com:mhahn/troposphere.git@fb2f2b6573a76da04e4231d80ff106c2b96e4fc0#egg=troposphere
-urllib3==1.15.1
+urllib3==1.26.5
